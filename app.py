@@ -15,14 +15,14 @@ from utils.helpers import save_uploaded_file, load_brand_data
 class StockDataProcessor:
     def __init__(self):
         self.trading_hours = {
-            'start': '09:30',  # Market opens at 9:30 AM
-            'end': '16:00'  # Market closes at 4:00 PM
+            'start': '09:00',  # Market opens at 9:00 AM
+            'end': '15:00'      # Market closes at 3:00 PM
         }
 
     def generate_hourly_prices(self, open_price, close_price, high, low, timestamp):
         """Generate synthetic hourly prices between market open and close"""
-        trading_hours = 6.5  # 6.5 hours from 9:30 AM to 4:00 PM
-        hours = np.linspace(0, trading_hours, num=8)  # 8 points for 7 intervals
+        trading_hours = 6  # 6 hours from 9:00 AM to 3:00 PM
+        hours = np.linspace(0, trading_hours, num=7)  # 7 points for 6 intervals
 
         # Create base price trajectory
         prices = []
@@ -48,7 +48,7 @@ class StockDataProcessor:
 
         # Generate timestamps
         timestamps = []
-        base_time = timestamp.replace(hour=9, minute=30)
+        base_time = timestamp.replace(hour=9, minute=0)
         for i in range(len(hours)):
             hour_delta = timedelta(hours=hours[i])
             timestamps.append(base_time + hour_delta)
@@ -137,6 +137,8 @@ def prepare_stock_data(csv_file):
     hourly_df = processor.process_stock_data(df)
 
     return hourly_df
+
+
 def create_historical_graph(df, predictions, brand, start_date, end_date):
     """Create historical graph with future predictions for selected date range"""
     fig = go.Figure()
@@ -319,6 +321,59 @@ def create_hourly_prediction_graph(df, predictions, selected_date, brand):
     return fig
 
 
+def create_interpolated_hourly_chart(df, brand, selected_date):
+    fig = go.Figure()
+
+    # Filter data for the selected date
+    hourly_data = df[df['timestamp'].dt.date == selected_date]
+
+    # Plot interpolated hourly data with markers
+    if not hourly_data.empty:
+        fig.add_trace(go.Scatter(
+            x=hourly_data['timestamp'],
+            y=hourly_data['value'],
+            name='Interpolated Hourly Data',
+            mode='lines+markers',
+            line=dict(color='green', width=2, shape='linear'),
+            marker=dict(size=6)
+        ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"{brand} - Interpolated Hourly Data ({selected_date})",
+            font=dict(size=20)
+        ),
+        xaxis=dict(
+            title="Time",
+            tickformat='%H:%M',
+            dtick=3600000,  # 1 hour in milliseconds
+            range=[datetime.combine(selected_date, datetime.strptime('09:00', '%H:%M').time()),
+                   datetime.combine(selected_date, datetime.strptime('15:00', '%H:%M').time())],
+            gridcolor='lightgrey',
+            showgrid=True
+        ),
+        yaxis=dict(
+            title="Value",
+            gridcolor='lightgrey',
+            showgrid=True
+        ),
+        height=400,
+        hovermode='x unified',
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        plot_bgcolor='white'
+    )
+
+    return fig
+
+
+# app.py (continued)
+
 def main():
     st.set_page_config(layout="wide")
     st.title("Brand Prediction Dashboard")
@@ -426,14 +481,14 @@ def main():
                 value_change = date_range_df['value'].iloc[-1] - date_range_df['value'].iloc[0]
                 st.metric("Value Change", f"{value_change:.2f}")
 
-            # Display graphs
+            # Display historical graph
             st.subheader("Historical View")
             historical_fig = create_historical_graph(processed_df, predictions, selected_brand,
-                                                     start_date, end_date)
+                                                    start_date, end_date)
             st.plotly_chart(historical_fig, use_container_width=True)
 
-            # Daily and Hourly Predictions
-            graph_cols = st.columns(2)
+            # Daily, Hourly Predictions and Interpolated Hourly Chart
+            graph_cols = st.columns(3)  # Changed to 3 columns to accommodate the new chart
 
             with graph_cols[0]:
                 daily_fig = create_daily_prediction_graph(processed_df, predictions,
@@ -444,6 +499,12 @@ def main():
                 hourly_fig = create_hourly_prediction_graph(processed_df, predictions,
                                                             selected_date, selected_brand)
                 st.plotly_chart(hourly_fig, use_container_width=True)
+
+            with graph_cols[2]:
+                interpolated_hourly_fig = create_interpolated_hourly_chart(
+                    processed_df, selected_brand, selected_date
+                )
+                st.plotly_chart(interpolated_hourly_fig, use_container_width=True)
 
         else:
             st.warning(f"No data available for {selected_brand}. Please upload data.")
