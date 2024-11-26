@@ -16,12 +16,12 @@ class StockDataProcessor:
     def __init__(self):
         self.trading_hours = {
             'start': '09:00',  # Market opens at 9:00 AM
-            'end': '15:00'      # Market closes at 3:00 PM
+            'end': '18:00'      # Market closes at 3:00 PM
         }
 
     def generate_hourly_prices(self, open_price, close_price, high, low, timestamp):
         """Generate synthetic hourly prices between market open and close"""
-        trading_hours = 6  # 6 hours from 9:00 AM to 3:00 PM
+        trading_hours = 9  # 6 hours from 9:00 AM to 3:00 PM
         hours = np.linspace(0, trading_hours, num=7)  # 7 points for 6 intervals
 
         # Create base price trajectory
@@ -322,22 +322,41 @@ def create_hourly_prediction_graph(df, predictions, selected_date, brand):
 
 
 def create_interpolated_hourly_chart(df, brand, selected_date):
+    # Filter data for selected date during market hours
+    market_start = datetime.combine(selected_date, datetime.strptime('09:00', '%H:%M').time())
+    market_end = datetime.combine(selected_date, datetime.strptime('18:00', '%H:%M').time())
+
+    # Create mask for selected date and market hours
+    mask = (
+            (df['timestamp'].dt.date == selected_date) &
+            (df['timestamp'] >= market_start) &
+            (df['timestamp'] <= market_end)
+    )
+    hourly_data = df[mask].copy()
+
+    # If no data, return empty figure
+    if hourly_data.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"No Data Available for {brand} on {selected_date}",
+            height=400
+        )
+        return fig
+
+    # Create Figure
     fig = go.Figure()
 
-    # Filter data for the selected date
-    hourly_data = df[df['timestamp'].dt.date == selected_date]
+    # Add scatter plot
+    fig.add_trace(go.Scatter(
+        x=hourly_data['timestamp'],
+        y=hourly_data['value'],
+        mode='lines+markers',
+        name='Actual Hourly Data',
+        line=dict(color='green', width=2),
+        marker=dict(size=8, color='green')
+    ))
 
-    # Plot interpolated hourly data with markers
-    if not hourly_data.empty:
-        fig.add_trace(go.Scatter(
-            x=hourly_data['timestamp'],
-            y=hourly_data['value'],
-            name='Interpolated Hourly Data',
-            mode='lines+markers',
-            line=dict(color='green', width=2, shape='linear'),
-            marker=dict(size=6)
-        ))
-
+    # Layout configuration
     fig.update_layout(
         title=dict(
             text=f"{brand} - Interpolated Hourly Data ({selected_date})",
@@ -346,9 +365,6 @@ def create_interpolated_hourly_chart(df, brand, selected_date):
         xaxis=dict(
             title="Time",
             tickformat='%H:%M',
-            dtick=3600000,  # 1 hour in milliseconds
-            range=[datetime.combine(selected_date, datetime.strptime('09:00', '%H:%M').time()),
-                   datetime.combine(selected_date, datetime.strptime('15:00', '%H:%M').time())],
             gridcolor='lightgrey',
             showgrid=True
         ),
@@ -359,19 +375,10 @@ def create_interpolated_hourly_chart(df, brand, selected_date):
         ),
         height=400,
         hovermode='x unified',
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        ),
         plot_bgcolor='white'
     )
 
     return fig
-
-
 # app.py (continued)
 
 def main():
