@@ -20,99 +20,92 @@ class StockDataProcessor:
         }
 
     def generate_hourly_prices(self, open_price, close_price, high, low, timestamp):
-        """Generate synthetic hourly prices between market open and close with stronger volatility"""
-        trading_hours = 22  # 6.5 hours from 9:30 AM to 4:00 PM
-        hours = np.linspace(0, trading_hours, num=23)  # 23 points for 22 intervals
+        """Generate synthetic hourly prices with increased randomness"""
+        num_points = 23  # 23 points for 22 intervals
+        np.random.seed(int(timestamp.timestamp()))  # Seed for reproducibility
 
-        # Create base price trajectory
-        prices = []
-        for hour in hours:
-            # Calculate progress through the trading day (0 to 1)
-            progress = hour / trading_hours
+        # Create price trajectory with more dynamic variation
+        hours = np.linspace(0, 22, num=num_points)
+        prices = np.zeros(num_points)
 
-            # Base price using weighted average of open and close
-            base_price = open_price * (1 - progress) + close_price * progress
-
-            # Add significant randomness to simulate volatility
-            price_range = high - low
-            volatility_factor = np.random.uniform(0.8, 1.2)  # Volatility factor between 0.8x and 1.2x the price range
-            random_factor = np.random.normal(0, 0.3)  # Increased randomness with a higher standard deviation
-
-            # Simulate a more noticeable fluctuation
-            price = base_price + random_factor * price_range * volatility_factor  # Apply volatility factor
-
-            # Ensure price stays within the day's range
-            price = min(max(price, low), high)
-            prices.append(price)
-
-        # Ensure first and last prices match open and close
+        # Start and end points
         prices[0] = open_price
         prices[-1] = close_price
 
+        # Price range and volatility
+        price_range = high - low
+        volatility = price_range * 0.1  # 10% volatility
+
+        # Generate intermediate prices
+        for i in range(1, num_points - 1):
+            # Progress through trading day
+            progress = hours[i] / 22
+
+            # Base interpolation between open and close
+            base_price = open_price * (1 - progress) + close_price * progress
+
+            # Add randomness with different distribution
+            price_noise = np.random.normal(0, volatility) * np.sin(progress * np.pi)
+            momentum = np.random.uniform(-volatility, volatility)
+
+            # Calculate price with multiple randomness factors
+            new_price = base_price + price_noise + momentum
+
+            # Constrain within day's range
+            new_price = max(min(new_price, high), low)
+            prices[i] = new_price
+
         # Generate timestamps
-        timestamps = []
-        base_time = timestamp.replace(hour=9, minute=30, second=0, microsecond=0)
-        tz = pytz.timezone("Asia/Karachi")  # Adjust the timezone accordingly
-        base_time = base_time.astimezone(tz)
+        tz = pytz.timezone("Asia/Karachi")
+        base_time = timestamp.replace(hour=9, minute=30, second=0, microsecond=0).astimezone(tz)
 
-        print(f"Selected Date: {base_time}")
-
-        for i in range(len(hours)):
-            hour_delta = timedelta(hours=hours[i])
-            new_timestamp = base_time + hour_delta
-            new_timestamp = new_timestamp.astimezone(tz)
-            timestamps.append(new_timestamp)
-
-        # Debug: Print the timestamps and prices for verification
-        print(f"Generated Timestamps: {timestamps}")
-        print(f"Generated Prices: {prices}")
+        timestamps = [base_time + timedelta(hours=h) for h in hours]
 
         return timestamps, prices
 
     def process_stock_data(self, df):
-        """Convert daily OHLC data to hourly data"""
-        # Convert date column to datetime if it's not already
-        if 'Date' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['Date']).dt.tz_localize('UTC').dt.tz_convert('Asia/Karachi')
-
-        # Sort by timestamp
+        """Convert daily OHLC data to hourly data with robust generation"""
+        # Ensure datetime conversion
+        df['timestamp'] = pd.to_datetime(df['Date']).dt.tz_localize('UTC').dt.tz_convert('Asia/Karachi')
         df = df.sort_values('timestamp')
 
-        # Create hourly data points
+        # Container for hourly data
         hourly_data = []
 
-        for idx, row in df.iterrows():
-            timestamps, prices = self.generate_hourly_prices(
-                float(row['Open']),
-                float(row['Price']),  # Assuming 'Price' is the closing price
-                float(row['High']),
-                float(row['Low']),
-                row['timestamp']
-            )
+        # Process each unique date separately
+        for date in df['Date'].unique():
+            # Get row for specific date
+            row = df[df['Date'] == date].iloc[0]
 
-            # Create hourly records
-            for t, p in zip(timestamps, prices):
-                hourly_data.append({
-                    'timestamp': t,
-                    'value': p,
-                    'original_date': row['Date'],
-                    'is_market_hour': True
-                })
+            # Generate unique hourly prices for this date
+            try:
+                timestamps, prices = self.generate_hourly_prices(
+                    float(row['Open']),
+                    float(row['Price']),  # Closing price
+                    float(row['High']),
+                    float(row['Low']),
+                    row['timestamp']
+                )
 
-        # Debug: Print hourly_data before DataFrame creation
-        print(f"Generated Hourly Data: {hourly_data}")
+                # Create hourly records with unique prices
+                for t, p in zip(timestamps, prices):
+                    hourly_data.append({
+                        'timestamp': t,
+                        'value': p,
+                        'original_date': date,
+                        'is_market_hour': True
+                    })
+            except Exception as e:
+                print(f"Error processing date {date}: {e}")
 
-        # Create DataFrame from hourly data
+        # Create DataFrame with generated hourly data
         hourly_df = pd.DataFrame(hourly_data)
-
-        # Sort by timestamp
         hourly_df = hourly_df.sort_values('timestamp')
 
         # Add technical indicators
         hourly_df = self.add_technical_indicators(hourly_df)
 
         return hourly_df
-
     def add_technical_indicators(self, df):
         """Add technical indicators to the hourly data"""
         # Simple Moving Averages
