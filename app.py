@@ -15,17 +15,17 @@ import pytz
 class StockDataProcessor:
     def __init__(self):
         self.trading_hours = {
-            'start': '01:00',  # Market opens at 9:30 AM
-            'end': '23:00'  # Market closes at 4:00 PM
+            'start': '09:00',  # Market opens at 9:00 AM
+            'end': '15:00'  # Market closes at 3:00 PM
         }
 
     def generate_hourly_prices(self, open_price, close_price, high, low, timestamp):
-        """Generate synthetic hourly prices with increased randomness"""
-        num_points = 23  # 23 points for 22 intervals
+        """Generate synthetic hourly prices with increased randomness and market dynamics"""
+        num_points = 6  # Only 6 points from 9 AM to 3 PM
         np.random.seed(int(timestamp.timestamp()))  # Seed for reproducibility
 
         # Create price trajectory with more dynamic variation
-        hours = np.linspace(0, 22, num=num_points)
+        hours = np.linspace(9, 15, num=num_points)  # From 9 AM to 3 PM
         prices = np.zeros(num_points)
 
         # Start and end points
@@ -34,37 +34,51 @@ class StockDataProcessor:
 
         # Price range and volatility
         price_range = high - low
-        volatility = price_range * 0.1  # 10% volatility
+        volatility = price_range * 0.15  # Increased volatility to 15%
+
+        # Market session dynamics
+        def market_hour_effect(hour):
+            """Simulate typical market hour price movements"""
+            # More volatility in market opening and closing hours
+            market_hours = [(0, 2), (9, 11), (21, 22)]  # Early morning, mid-morning, late afternoon
+            for start, end in market_hours:
+                if start <= hour <= end:
+                    return 1.5  # Higher volatility during these periods
+            return 1.0
 
         # Generate intermediate prices
         for i in range(1, num_points - 1):
             # Progress through trading day
-            progress = hours[i] / 22
+            progress = (hours[i] - 9) / 6  # Scale to progress from 9 to 15 hours
 
-            # Base interpolation between open and close
-            base_price = open_price * (1 - progress) + close_price * progress
+            # Base interpolation between open and close with non-linear progression
+            base_price = open_price * (1 - np.sin(progress * np.pi)) + close_price * np.sin(progress * np.pi)
+
+            # Market hour effect
+            hour_effect = market_hour_effect(hours[i])
 
             # Add randomness with different distribution
-            price_noise = np.random.normal(0, volatility) * np.sin(progress * np.pi)
-            momentum = np.random.uniform(-volatility, volatility)
+            price_noise = np.random.normal(0, volatility * hour_effect) * np.sin(progress * np.pi)
+            momentum = np.random.uniform(-volatility, volatility) * hour_effect
+            trend_component = (close_price - open_price) * progress * 0.5
 
             # Calculate price with multiple randomness factors
-            new_price = base_price + price_noise + momentum
+            new_price = base_price + price_noise + momentum + trend_component
 
-            # Constrain within day's range
-            new_price = max(min(new_price, high), low)
+            # Constrain within day's range with some flex
+            new_price = max(min(new_price, high * 1.02), low * 0.98)
             prices[i] = new_price
 
-        # Generate timestamps
+        # Generate timestamps for the selected time range
         tz = pytz.timezone("Asia/Karachi")
-        base_time = timestamp.replace(hour=9, minute=30, second=0, microsecond=0).astimezone(tz)
+        base_time = timestamp.replace(hour=9, minute=0, second=0, microsecond=0).astimezone(tz)
 
-        timestamps = [base_time + timedelta(hours=h) for h in hours]
+        timestamps = [base_time + timedelta(hours=h - 9) for h in hours]  # Adjust for 9 AM as start time
 
         return timestamps, prices
 
     def process_stock_data(self, df):
-        """Convert daily OHLC data to hourly data with robust generation"""
+        """Convert daily OHLC data to hourly data with interpolation and increased realism"""
         # Ensure datetime conversion
         df['timestamp'] = pd.to_datetime(df['Date']).dt.tz_localize('UTC').dt.tz_convert('Asia/Karachi')
         df = df.sort_values('timestamp')
@@ -77,26 +91,26 @@ class StockDataProcessor:
             # Get row for specific date
             row = df[df['Date'] == date].iloc[0]
 
-            # Generate unique hourly prices for this date
-            try:
-                timestamps, prices = self.generate_hourly_prices(
-                    float(row['Open']),
-                    float(row['Price']),  # Closing price
-                    float(row['High']),
-                    float(row['Low']),
-                    row['timestamp']
-                )
+            # Get prices and timestamp
+            open_price = float(row['Open'])
+            close_price = float(row['Price'])
+            high_price = float(row['High'])
+            low_price = float(row['Low'])
+            timestamp = row['timestamp']
 
-                # Create hourly records with unique prices
-                for t, p in zip(timestamps, prices):
-                    hourly_data.append({
-                        'timestamp': t,
-                        'value': p,
-                        'original_date': date,
-                        'is_market_hour': True
-                    })
-            except Exception as e:
-                print(f"Error processing date {date}: {e}")
+            # Generate hourly timestamps and prices
+            hourly_timestamps, hourly_prices = self.generate_hourly_prices(
+                open_price, close_price, high_price, low_price, timestamp
+            )
+
+            # Create hourly records
+            for t, v in zip(hourly_timestamps, hourly_prices):
+                hourly_data.append({
+                    'timestamp': t,
+                    'value': v,
+                    'original_date': date,
+                    'is_market_hour': True
+                })
 
         # Create DataFrame with generated hourly data
         hourly_df = pd.DataFrame(hourly_data)
@@ -267,21 +281,34 @@ def create_daily_prediction_graph(df, predictions, selected_date, brand):
 
     return fig
 
-
 def create_hourly_prediction_graph(df, predictions, selected_date, brand):
-    """Create hourly prediction graph with smooth lines"""
+    """Create hourly prediction graph with smooth lines (only showing 6 points from 9 AM to 3 PM)"""
     fig = go.Figure()
 
-    hourly_data = df[df['timestamp'].dt.date == selected_date]
+    # Ensure consistent timezone
+    tz = pytz.timezone('Asia/Karachi')
+    selected_date = pd.Timestamp(selected_date).tz_localize(tz)
 
-    print(f"Filtered Hourly Data (len={len(hourly_data)}): {hourly_data}")  # Debug print
-    tz = pytz.timezone('Asia/Karachi')  # Replace with the required timezone
+    # Convert timestamp columns to timezone-aware datetimes
+    df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None).dt.tz_localize('Asia/Karachi')
+    predictions['hourly']['timestamp'] = pd.to_datetime(predictions['hourly']['timestamp']).dt.tz_localize(None).dt.tz_localize('Asia/Karachi')
 
-    predictions['hourly']['timestamp'] = pd.to_datetime(predictions['hourly']['timestamp'])
+    # Filter data for selected date using date comparison
+    hourly_data = df[df['timestamp'].dt.date == selected_date.date()]
+    hourly_predictions = predictions['hourly'][predictions['hourly']['timestamp'].dt.date == selected_date.date()]
 
-    predictions['hourly']['timestamp'] = predictions['hourly']['timestamp'].dt.tz_localize('UTC').dt.tz_convert(tz)
+    # Filter the hourly data to only include times between 9 AM and 3 PM
+    hourly_data = hourly_data[(hourly_data['timestamp'].dt.hour >= 9) & (hourly_data['timestamp'].dt.hour <= 15)]
+    hourly_predictions = hourly_predictions[(hourly_predictions['timestamp'].dt.hour >= 9) & (hourly_predictions['timestamp'].dt.hour <= 15)]
 
-    hourly_predictions = predictions['hourly'][predictions['hourly']['timestamp'].dt.date == selected_date]
+    # Ensure we sample exactly 6 points
+    if len(hourly_data) >= 6:
+        hourly_data = hourly_data.iloc[np.linspace(0, len(hourly_data)-1, 6, dtype=int)]  # Sample 6 points
+        hourly_predictions = hourly_predictions.iloc[np.linspace(0, len(hourly_predictions)-1, 6, dtype=int)]  # Sample 6 points
+    else:
+        # If there are fewer than 6 points, use all available data (adjust logic as needed)
+        hourly_data = hourly_data.iloc[np.linspace(0, len(hourly_data)-1, len(hourly_data), dtype=int)]
+        hourly_predictions = hourly_predictions.iloc[np.linspace(0, len(hourly_predictions)-1, len(hourly_predictions), dtype=int)]
 
     if not hourly_data.empty:
         fig.add_trace(go.Scatter(
@@ -303,7 +330,7 @@ def create_hourly_prediction_graph(df, predictions, selected_date, brand):
 
     fig.update_layout(
         title=dict(
-            text=f"{brand} - Hourly Predictions ({selected_date})",
+            text=f"{brand} - Hourly Predictions ({selected_date.date()})",
             font=dict(size=20)
         ),
         xaxis=dict(
@@ -331,7 +358,6 @@ def create_hourly_prediction_graph(df, predictions, selected_date, brand):
     )
 
     return fig
-
 
 def main():
     st.set_page_config(layout="wide")
