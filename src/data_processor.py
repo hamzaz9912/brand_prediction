@@ -8,35 +8,39 @@ class DataProcessor:
     def process_data(df):
         """Process the uploaded data for model training"""
         try:
-            # Identify datetime column
-            date_column_candidates = ['timestamp', 'date', 'datetime', 'time', 'Date', 'DateTime', 'Time']
-            datetime_col = None
+            # Check for the date column
+            if 'mDate' in df.columns:
+                df = df.rename(columns={'mDate': 'timestamp'})
+            elif 'Date' in df.columns:
+                df = df.rename(columns={'Date': 'timestamp'})
+            else:
+                raise Exception("No date column found. Ensure the date column is named `mDate` or `Date`.")
 
-            for col in date_column_candidates:
-                if col in df.columns:
-                    datetime_col = col
-                    break
+            # Parse the `timestamp` column as datetime
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='%m/%d/%Y', errors='coerce')
 
-            if datetime_col is None:
-                datetime_col = df.columns[0]
+            # Drop rows with invalid or missing dates
+            df = df.dropna(subset=['timestamp'])
+            if df.empty:
+                raise Exception(
+                    "No valid dates found in the date column. Check the date format (expected: MM/DD/YYYY).")
 
-            # Identify value column
-            value_column_candidates = ['value', 'price', 'amount', 'Value', 'Price', 'Amount', 'Close']
-            value_col = None
+            # Clean and process the `Price` column
+            if 'Price' in df.columns:
+                # Remove commas and convert to numeric
+                df['Price'] = df['Price'].replace({',': ''}, regex=True).astype(float)
+            else:
+                raise Exception("No `Price` column found in the file. Ensure the value column is named `Price`.")
 
-            for col in value_column_candidates:
-                if col in df.columns:
-                    value_col = col
-                    break
+            # Drop rows with missing or invalid prices
+            df = df.dropna(subset=['Price'])
+            if df.empty:
+                raise Exception("No valid prices found in the `Price` column.")
 
-            if value_col is None:
-                numeric_cols = df.select_dtypes(include=[np.number]).columns
-                value_col = numeric_cols[-1] if len(numeric_cols) > 0 else df.columns[1]
-
-            # Create standardized DataFrame
+            # Standardize the DataFrame
             standardized_df = pd.DataFrame()
-            standardized_df['timestamp'] = pd.to_datetime(df[datetime_col])
-            standardized_df['value'] = pd.to_numeric(df[value_col], errors='coerce')
+            standardized_df['timestamp'] = df['timestamp']
+            standardized_df['value'] = df['Price']
 
             # Create features for daily and hourly predictions
             standardized_df['hour'] = standardized_df['timestamp'].dt.hour
@@ -45,11 +49,11 @@ class DataProcessor:
             standardized_df['month'] = standardized_df['timestamp'].dt.month
             standardized_df['year'] = standardized_df['timestamp'].dt.year
 
-            # Create daily average values
+            # Create daily statistics
             daily_df = standardized_df.resample('D', on='timestamp')['value'].agg(['mean', 'min', 'max']).reset_index()
             daily_df.columns = ['timestamp', 'daily_mean', 'daily_min', 'daily_max']
 
-            # Merge daily values back
+            # Merge daily statistics back to the main DataFrame
             standardized_df = pd.merge(
                 standardized_df,
                 daily_df,
@@ -57,7 +61,7 @@ class DataProcessor:
                 how='left'
             )
 
-            return standardized_df.dropna().sort_values('timestamp')
+            return standardized_df.sort_values('timestamp')
 
         except Exception as e:
             raise Exception(f"Error processing data: {str(e)}")
@@ -87,3 +91,5 @@ class DataProcessor:
             })
 
         return pd.DataFrame(future_dates)
+
+
